@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MIT
  */
 #pragma once
+#include <apps/app_badge/view/view.h>
 #include <memory>
 #include <smooth_lvgl.hpp>
 #include <string_view>
@@ -14,14 +15,21 @@ public:
     void init(lv_obj_t* parent = lv_screen_active());
     void showEntry(std::string_view label, std::string_view url, std::size_t index, std::size_t count);
     void showEmpty();
+    void update();
+    bool consumeEditRequested();
 
 private:
+    void showEditDialog();
+    static void handlePanelLongPressed(lv_event_t* e);
+
     std::unique_ptr<uitk::lvgl_cpp::Container> _panel;
     std::unique_ptr<uitk::lvgl_cpp::Label> _label;
     std::unique_ptr<uitk::lvgl_cpp::Container> _qr_panel;
     std::unique_ptr<uitk::lvgl_cpp::Qrcode> _qrcode;
     std::unique_ptr<uitk::lvgl_cpp::Label> _counter_label;
     std::unique_ptr<uitk::lvgl_cpp::Label> _empty_hint_label;
+    std::unique_ptr<EditBadgeDialog> _edit_dialog;
+    bool _edit_requested = false;
 };
 
 }  // namespace view

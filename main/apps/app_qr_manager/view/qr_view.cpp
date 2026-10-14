@@ -36,6 +36,7 @@ void QrView::init(lv_obj_t* parent)
     _panel->setBgColor(lv_color_black());
     _panel->setBgOpa(LV_OPA_COVER);
     _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _panel->addEventCb(handlePanelLongPressed, LV_EVENT_LONG_PRESSED, this);
 
     _label = std::make_unique<Label>(_panel->get());
     _label->setTextFont(&MontserratSemiBold26);
@@ -55,6 +56,8 @@ void QrView::init(lv_obj_t* parent)
     _qr_panel->setBgColor(lv_color_white());
     _qr_panel->setBgOpa(LV_OPA_COVER);
     _qr_panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    // Let long press reach the parent panel
+    _qr_panel->removeFlag(LV_OBJ_FLAG_CLICKABLE);
 
     _qrcode = std::make_unique<Qrcode>(_qr_panel->get());
     _qrcode->setSize(_qr_size);
@@ -68,7 +71,7 @@ void QrView::init(lv_obj_t* parent)
     _counter_label->align(LV_ALIGN_CENTER, 0, _counter_pos_y);
 
     _empty_hint_label = std::make_unique<Label>(_panel->get());
-    _empty_hint_label->setText("No URL registered");
+    _empty_hint_label->setText("No URL registered\nTap and hold to add");
     _empty_hint_label->setTextFont(&lv_font_montserrat_24);
     _empty_hint_label->setTextColor(lv_color_hex(_hint_text_color));
     _empty_hint_label->setWidth(_hint_width);
@@ -95,4 +98,45 @@ void QrView::showEmpty()
     _qr_panel->setHidden(true);
     _counter_label->setHidden(true);
     _empty_hint_label->setHidden(false);
+}
+
+void QrView::update()
+{
+    if (!_edit_dialog) {
+        return;
+    }
+
+    if (_edit_dialog->isConfirmed()) {
+        _edit_requested = true;
+        _edit_dialog.reset();
+        return;
+    }
+
+    if (_edit_dialog->isCancelled()) {
+        _edit_dialog.reset();
+    }
+}
+
+bool QrView::consumeEditRequested()
+{
+    bool requested  = _edit_requested;
+    _edit_requested = false;
+    return requested;
+}
+
+void QrView::showEditDialog()
+{
+    _edit_dialog.reset();
+    _edit_dialog = std::make_unique<EditBadgeDialog>();
+    _edit_dialog->init(lv_screen_active(), "Edit URL list?");
+}
+
+void QrView::handlePanelLongPressed(lv_event_t* e)
+{
+    auto* self = static_cast<QrView*>(lv_event_get_user_data(e));
+    if (self == nullptr) {
+        return;
+    }
+
+    self->showEditDialog();
 }

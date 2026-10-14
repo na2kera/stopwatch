@@ -11,6 +11,34 @@
 #include <string_view>
 #include <vector>
 
+#include <esp_err.h>
+#include <esp_http_server.h>
+
+/**
+ * @brief Generic config access point: starts a Wi-Fi AP with captive portal and serves a page with custom API routes,
+ * blocking until the page posts to /close
+ *
+ */
+namespace config_ap {
+
+struct Route {
+    std::string uri;
+    httpd_method_t method = HTTP_GET;
+    std::function<esp_err_t(httpd_req_t*)> handler;
+};
+
+struct Site {
+    std::string_view indexHtml;
+    std::vector<Route> routes;
+};
+
+std::string ap_ssid();
+std::string_view ap_url();
+
+bool run(const std::function<void(std::string_view)>& onLog, const Site& site);
+
+}  // namespace config_ap
+
 namespace badge::config_ap {
 
 struct SlotState {

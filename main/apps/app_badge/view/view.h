@@ -5,6 +5,7 @@
  */
 #pragma once
 #include <memory>
+#include <string_view>
 #include <smooth_lvgl.hpp>
 #include <uitk/short_namespace.hpp>
 #include <vector>
@@ -13,7 +14,7 @@ namespace view {
 
 class EditBadgeDialog {
 public:
-    void init(lv_obj_t* parent);
+    void init(lv_obj_t* parent, std::string_view message = "Enter badge edit?");
     bool isConfirmed() const
     {
         return _is_confirmed;

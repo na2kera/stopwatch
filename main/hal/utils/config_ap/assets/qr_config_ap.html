@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>QR Manager</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef4ff;
+      --panel: rgba(255, 255, 255, 0.94);
+      --text: #172033;
+      --muted: #5d6b85;
+      --line: #d7e1f4;
+      --primary: #176ff2;
+      --danger: #cb2d3e;
+      --surface: rgba(250, 252, 255, 0.9);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Helvetica Neue", "PingFang SC", "Noto Sans SC", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top, rgba(23, 111, 242, 0.18), transparent 38%),
+        linear-gradient(180deg, #f7faff 0%, var(--bg) 100%);
+      display: grid;
+      place-items: center;
+      padding: 20px;
+    }
+
+    .card {
+      width: min(100%, 640px);
+      background: var(--panel);
+      border: 1px solid rgba(255, 255, 255, 0.8);
+      border-radius: 24px;
+      box-shadow: 0 20px 48px rgba(22, 42, 92, 0.14);
+      padding: 24px;
+      backdrop-filter: blur(10px);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.1;
+      text-align: center;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 20px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      background: var(--surface);
+      margin-top: 20px;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+    }
+
+    .count {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .entries {
+      display: grid;
+      gap: 10px;
+    }
+
+    .entry {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: white;
+      padding: 12px;
+    }
+
+    .entry-text {
+      min-width: 0;
+    }
+
+    .entry-label {
+      font-weight: 700;
+      font-size: 15px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .entry-url {
+      margin-top: 2px;
+      font-size: 13px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .entry-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .entry-actions button {
+      width: 40px;
+      padding: 10px 0;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 14px;
+      text-align: center;
+      padding: 18px 0;
+    }
+
+    .form {
+      display: grid;
+      gap: 12px;
+    }
+
+    label {
+      display: block;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    input[type="text"],
+    input[type="url"] {
+      display: block;
+      width: 100%;
+      margin-top: 6px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: white;
+      font-size: 16px;
+      color: var(--text);
+    }
+
+    .actions {
+      display: grid;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 14px;
+      padding: 14px 16px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      color: white;
+      background: var(--primary);
+    }
+
+    button.secondary {
+      background: #e9eef8;
+      color: var(--text);
+    }
+
+    button.ghost {
+      background: white;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+
+    button.danger {
+      background: #fbeaec;
+      color: var(--danger);
+    }
+
+    button.done {
+      background: #172033;
+      color: white;
+      box-shadow: 0 10px 24px rgba(23, 32, 51, 0.18);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+
+    #status {
+      margin-top: 18px;
+      min-height: 22px;
+      font-size: 14px;
+      color: var(--muted);
+      white-space: pre-line;
+    }
+
+    .error {
+      color: var(--danger);
+    }
+
+    @media (max-width: 900px) {
+      body {
+        padding: 0;
+      }
+
+      .card {
+        width: 100%;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        background: transparent;
+        backdrop-filter: none;
+        padding: 12px;
+      }
+
+      .panel {
+        padding: 14px;
+        border-radius: 16px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="card">
+    <h1>QR Manager</h1>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>URLs</h2>
+        <span id="count" class="count"></span>
+      </div>
+      <div id="entries" class="entries"></div>
+    </section>
+
+    <section class="panel">
+      <h2 id="formTitle">Add URL</h2>
+      <form id="form" class="form">
+        <label>
+          Label
+          <input id="label" type="text" autocomplete="off" placeholder="GitHub" required />
+        </label>
+        <label>
+          URL
+          <input id="url" type="url" autocomplete="off" autocapitalize="off" placeholder="https://github.com/..."
+            required />
+        </label>
+        <button id="submit" type="submit">Add</button>
+        <button id="cancelEdit" type="button" class="ghost" hidden>Cancel</button>
+      </form>
+    </section>
+
+    <div class="actions">
+      <button id="save" type="button">Save To Device</button>
+      <button id="close" type="button" class="done">Done</button>
+    </div>
+
+    <div id="status"></div>
+  </main>
+
+  <script>
+    const entriesNode = document.getElementById('entries');
+    const countNode = document.getElementById('count');
+    const form = document.getElementById('form');
+    const formTitle = document.getElementById('formTitle');
+    const labelInput = document.getElementById('label');
+    const urlInput = document.getElementById('url');
+    const submitButton = document.getElementById('submit');
+    const cancelEditButton = document.getElementById('cancelEdit');
+    const saveButton = document.getElementById('save');
+    const closeButton = document.getElementById('close');
+    const statusNode = document.getElementById('status');
+
+    const state = {
+      entries: [],
+      maxEntryCount: 10,
+      maxLabelLength: 32,
+      maxUrlLength: 256,
+      editingIndex: -1,
+      dirty: false,
+      busy: false,
+    };
+
+    function setStatus(message, isError = false) {
+      statusNode.textContent = message;
+      statusNode.classList.toggle('error', isError);
+    }
+
+    function setBusy(isBusy) {
+      state.busy = isBusy;
+      saveButton.disabled = isBusy;
+      closeButton.disabled = isBusy;
+      submitButton.disabled = isBusy;
+    }
+
+    function isAscii(text) {
+      return /^[\x20-\x7e]*$/.test(text);
+    }
+
+    function normalizeUrl(text) {
+      const trimmed = text.trim();
+      try {
+        // Percent-encode non-ASCII characters
+        return new URL(trimmed).href;
+      } catch (error) {
+        return trimmed;
+      }
+    }
+
+    function makeButton(text, className, title, onClick) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = className;
+      button.textContent = text;
+      button.title = title;
+      button.addEventListener('click', onClick);
+      return button;
+    }
+
+    function render() {
+      entriesNode.replaceChildren();
+      countNode.textContent = `${state.entries.length} / ${state.maxEntryCount}`;
+
+      if (state.entries.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'No URL registered';
+        entriesNode.appendChild(empty);
+      }
+
+      state.entries.forEach((entry, index) => {
+        const row = document.createElement('div');
+        row.className = 'entry';
+
+        const text = document.createElement('div');
+        text.className = 'entry-text';
+        const label = document.createElement('div');
+        label.className = 'entry-label';
+        label.textContent = entry.label;
+        const url = document.createElement('div');
+        url.className = 'entry-url';
+        url.textContent = entry.url;
+        text.append(label, url);
+
+        const actions = document.createElement('div');
+        actions.className = 'entry-actions';
+        const up = makeButton('↑', 'ghost', 'Move up', () => moveEntry(index, -1));
+        up.disabled = index === 0;
+        const down = makeButton('↓', 'ghost', 'Move down', () => moveEntry(index, 1));
+        down.disabled = index === state.entries.length - 1;
+        actions.append(
+          up,
+          down,
+          makeButton('✎', 'secondary', 'Edit', () => startEdit(index)),
+          makeButton('✕', 'danger', 'Delete', () => deleteEntry(index)),
+        );
+
+        row.append(text, actions);
+        entriesNode.appendChild(row);
+      });
+
+      const isEditing = state.editingIndex >= 0;
+      formTitle.textContent = isEditing ? 'Edit URL' : 'Add URL';
+      submitButton.textContent = isEditing ? 'Update' : 'Add';
+      cancelEditButton.hidden = !isEditing;
+      saveButton.textContent = state.dirty ? 'Save To Device *' : 'Save To Device';
+    }
+
+    function markDirty() {
+      state.dirty = true;
+      setStatus('Unsaved changes. Tap "Save To Device" to apply.');
+    }
+
+    function moveEntry(index, direction) {
+      const target = index + direction;
+      if (target < 0 || target >= state.entries.length) {
+        return;
+      }
+      [state.entries[index], state.entries[target]] = [state.entries[target], state.entries[index]];
+      if (state.editingIndex === index) {
+        state.editingIndex = target;
+      } else if (state.editingIndex === target) {
+        state.editingIndex = index;
+      }
+      markDirty();
+      render();
+    }
+
+    function deleteEntry(index) {
+      state.entries.splice(index, 1);
+      if (state.editingIndex === index) {
+        resetForm();
+      } else if (state.editingIndex > index) {
+        state.editingIndex -= 1;
+      }
+      markDirty();
+      render();
+    }
+
+    function startEdit(index) {
+      state.editingIndex = index;
+      labelInput.value = state.entries[index].label;
+      urlInput.value = state.entries[index].url;
+      render();
+      labelInput.focus();
+    }
+
+    function resetForm() {
+      state.editingIndex = -1;
+      form.reset();
+    }
+
+    function validate(label, url) {
+      if (label.length === 0 || label.length > state.maxLabelLength) {
+        return `Label must be 1-${state.maxLabelLength} characters`;
+      }
+      if (!isAscii(label)) {
+        return 'Label must be ASCII characters (the device font cannot show others)';
+      }
+      if (url.length === 0 || url.length > state.maxUrlLength) {
+        return `URL must be 1-${state.maxUrlLength} characters`;
+      }
+      if (!/^[\x21-\x7e]*$/.test(url)) {
+        return 'URL must not contain spaces';
+      }
+      return null;
+    }
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const label = labelInput.value.trim();
+      const url = normalizeUrl(urlInput.value);
+      const error = validate(label, url);
+      if (error) {
+        setStatus(error, true);
+        return;
+      }
+
+      if (state.editingIndex >= 0) {
+        state.entries[state.editingIndex] = { label, url };
+      } else {
+        if (state.entries.length >= state.maxEntryCount) {
+          setStatus(`Up to ${state.maxEntryCount} entries`, true);
+          return;
+        }
+        state.entries.push({ label, url });
+      }
+
+      resetForm();
+      markDirty();
+      render();
+    });
+
+    cancelEditButton.addEventListener('click', () => {
+      resetForm();
+      render();
+    });
+
+    async function requestJson(url, options) {
+      const response = await fetch(url, options);
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+      return text ? JSON.parse(text) : {};
+    }
+
+    async function loadEntries() {
+      setBusy(true);
+      try {
+        const data = await requestJson('/qr/entries');
+        state.entries = data.entries || [];
+        state.maxEntryCount = data.maxEntryCount || state.maxEntryCount;
+        state.maxLabelLength = data.maxLabelLength || state.maxLabelLength;
+        state.maxUrlLength = data.maxUrlLength || state.maxUrlLength;
+        labelInput.maxLength = state.maxLabelLength;
+        urlInput.maxLength = state.maxUrlLength;
+        state.dirty = false;
+        setStatus(data.apSsid ? `Connected to ${data.apSsid}` : '');
+      } catch (error) {
+        setStatus(`Failed to load: ${error.message}`, true);
+      } finally {
+        setBusy(false);
+        render();
+      }
+    }
+
+    async function saveEntries() {
+      setBusy(true);
+      setStatus('Saving...');
+      try {
+        await requestJson('/qr/entries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entries: state.entries }),
+        });
+        state.dirty = false;
+        setStatus('Saved.');
+      } catch (error) {
+        setStatus(`Failed to save: ${error.message}`, true);
+      } finally {
+        setBusy(false);
+        render();
+      }
+    }
+
+    async function closePage() {
+      if (state.dirty && !window.confirm('Discard unsaved changes?')) {
+        return;
+      }
+      setBusy(true);
+      try {
+        await fetch('/close', { method: 'POST' });
+        setStatus('Edit mode closed. You can disconnect from the device Wi-Fi.');
+      } catch (error) {
+        setStatus(`Failed to close: ${error.message}`, true);
+        setBusy(false);
+      }
+    }
+
+    saveButton.addEventListener('click', saveEntries);
+    closeButton.addEventListener('click', closePage);
+
+    loadEntries();
+  </script>
+</body>
+
+</html>

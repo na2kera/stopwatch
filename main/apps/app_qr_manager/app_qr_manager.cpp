@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "app_qr_manager.h"
+#include <apps/common/loading_page/loading_page.h>
 #include <hal/hal.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
@@ -23,21 +24,14 @@ void AppQrManager::onOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
 
-    // TODO: Load entries registered from the phone instead of hardcoded ones
-    _entries = {
-        {"GitHub", "https://github.com/na2kera"},
-        {"M5Stack", "https://m5stack.com"},
-        {"StopWatch Docs", "https://docs.m5stack.com/en/core/StopWatch"},
-    };
     _current_index = 0;
-
-    _key_manager = std::make_unique<input::KeyManager>();
+    _key_manager   = std::make_unique<input::KeyManager>();
 
     LvglLockGuard lock;
 
     _qr_view = std::make_unique<view::QrView>();
     _qr_view->init(lv_screen_active());
-    show_current_entry();
+    reload_entries();
 }
 
 void AppQrManager::onRunning()
@@ -52,20 +46,33 @@ void AppQrManager::onRunning()
         return;
     }
 
-    if (_entries.empty()) {
-        return;
-    }
-
-    if (event == input::KeyEvent::GoPrevious) {
-        _current_index = (_current_index + _entries.size() - 1) % _entries.size();
-    } else if (event == input::KeyEvent::GoNext) {
-        _current_index = (_current_index + 1) % _entries.size();
-    } else {
-        return;
-    }
-
     LvglLockGuard lock;
-    show_current_entry();
+
+    if (!_entries.empty()) {
+        if (event == input::KeyEvent::GoPrevious) {
+            _current_index = (_current_index + _entries.size() - 1) % _entries.size();
+            show_current_entry();
+        } else if (event == input::KeyEvent::GoNext) {
+            _current_index = (_current_index + 1) % _entries.size();
+            show_current_entry();
+        }
+    }
+
+    _qr_view->update();
+
+    if (_qr_view->consumeEditRequested()) {
+        mclog::info("start qr edit mode");
+        auto loading_page = std::make_unique<view::LoadingPage>(0x2B2B2B, 0xFFFFFF);
+        GetHAL().lvglUnlock();
+        GetHAL().startQrEditModeViaAp([&](std::string_view msg) {
+            LvglLockGuard lock;
+            loading_page->setMessage(msg);
+        });
+        GetHAL().lvglLock();
+
+        loading_page.reset();
+        reload_entries();
+    }
 }
 
 void AppQrManager::onClose()
@@ -77,6 +84,16 @@ void AppQrManager::onClose()
     LvglLockGuard lock;
 
     _qr_view.reset();
+}
+
+void AppQrManager::reload_entries()
+{
+    _entries = GetHAL().loadQrEntries();
+    mclog::tagInfo(getAppInfo().name, "loaded {} entries", _entries.size());
+    if (_current_index >= _entries.size()) {
+        _current_index = 0;
+    }
+    show_current_entry();
 }
 
 void AppQrManager::show_current_entry()

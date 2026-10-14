@@ -17,6 +17,7 @@
 #include <i2c_bus.h>
 #include <string_view>
 #include <array>
+#include <vector>
 #include <M5GFX.h>
 
 /**
@@ -46,6 +47,19 @@ struct AlarmStorageSnapshot {
     uint8_t count                                       = 0;
     uint16_t reserved                                   = 0;
     std::array<AlarmStorageEntry, maxAlarmCount> alarms = {};
+};
+
+/**
+ * @brief Label and URL pair shown as a QR code
+ *
+ */
+struct QrEntry {
+    static constexpr std::size_t maxEntryCount  = 10;
+    static constexpr std::size_t maxLabelLength = 32;
+    static constexpr std::size_t maxUrlLength   = 256;
+
+    std::string label;
+    std::string url;
 };
 
 /**
@@ -256,6 +270,10 @@ public:
     bool loadNextBadgeImage(lv_obj_t* image);
     bool loadPreviousBadgeImage(lv_obj_t* image);
     void startBadgeEditModeViaAp(std::function<void(std::string_view)> onLog);
+
+    /* ------------------------------------ QR ----------------------------------- */
+    std::vector<QrEntry> loadQrEntries();
+    void startQrEditModeViaAp(std::function<void(std::string_view)> onLog);
 
     /* ---------------------------------- Guide --------------------------------- */
     bool shouldShowGuide();
