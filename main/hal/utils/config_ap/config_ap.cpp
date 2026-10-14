@@ -27,18 +27,13 @@
 #include <lwip/ip_addr.h>
 #include <nvs_flash.h>
 
-namespace badge::config_ap {
+namespace config_ap {
 namespace {
 
-constexpr const char* _tag                   = "Badge-ConfigAp";
-constexpr const char* _ap_ssid_prefix        = "M5StopWatch";
-constexpr const char* _ap_url                = "http://192.168.4.1";
-constexpr EventBits_t _exit_requested_bit    = BIT0;
-constexpr std::size_t _max_upload_size_bytes = 2 * 1024 * 1024;
-constexpr const char* _json_content_type     = "application/json";
-
-extern const char badge_config_ap_html_start[] asm("_binary_badge_config_ap_html_start");
-extern const char badge_config_ap_html_end[] asm("_binary_badge_config_ap_html_end");
+constexpr const char* _tag                = "ConfigAp";
+constexpr const char* _ap_ssid_prefix     = "M5StopWatch";
+constexpr const char* _ap_url             = "http://192.168.4.1";
+constexpr EventBits_t _exit_requested_bit = BIT0;
 
 constexpr const char* _captive_portal_urls[] = {
     "/hotspot-detect.html",       "/generate_204*", "/mobile/status.php",
@@ -91,24 +86,9 @@ bool ensure_wifi_stack_ready()
     return true;
 }
 
-std::string make_ap_ssid()
-{
-    uint8_t mac[6] = {};
-    esp_err_t ret  = esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-    if (ret != ESP_OK) {
-        ESP_LOGW(_tag, "read mac failed: %s", esp_err_to_name(ret));
-        return std::string(_ap_ssid_prefix);
-    }
-
-    char ssid[32] = {};
-    snprintf(ssid, sizeof(ssid), "%s-%02X%02X", _ap_ssid_prefix, mac[4], mac[5]);
-    return std::string(ssid);
-}
-
 class Session {
 public:
-    Session(const std::function<void(std::string_view)>& onLog, const Callbacks& callbacks)
-        : _on_log(onLog), _callbacks(callbacks)
+    Session(const std::function<void(std::string_view)>& onLog, const Site& site) : _on_log(onLog), _site(site)
     {
     }
 
@@ -172,7 +152,7 @@ private:
         _dns_server = std::make_unique<DnsServer>();
         _dns_server->Start(ip_info.gw);
 
-        _ssid = make_ap_ssid();
+        _ssid = ap_ssid();
 
         wifi_config_t wifi_config = {};
         strncpy(reinterpret_cast<char*>(wifi_config.ap.ssid), _ssid.c_str(), sizeof(wifi_config.ap.ssid) - 1);
@@ -232,36 +212,6 @@ private:
             .handler  = &Session::handle_index,
             .user_ctx = this,
         };
-        httpd_uri_t upload = {
-            .uri      = "/upload",
-            .method   = HTTP_POST,
-            .handler  = &Session::handle_upload,
-            .user_ctx = this,
-        };
-        httpd_uri_t state = {
-            .uri      = "/badge/state",
-            .method   = HTTP_GET,
-            .handler  = &Session::handle_state,
-            .user_ctx = this,
-        };
-        httpd_uri_t image = {
-            .uri      = "/badge/image",
-            .method   = HTTP_GET,
-            .handler  = &Session::handle_image,
-            .user_ctx = this,
-        };
-        httpd_uri_t active = {
-            .uri      = "/badge/active",
-            .method   = HTTP_POST,
-            .handler  = &Session::handle_set_active,
-            .user_ctx = this,
-        };
-        httpd_uri_t remove = {
-            .uri      = "/badge/image",
-            .method   = HTTP_DELETE,
-            .handler  = &Session::handle_delete_image,
-            .user_ctx = this,
-        };
         httpd_uri_t close = {
             .uri      = "/close",
             .method   = HTTP_POST,
@@ -277,20 +227,17 @@ private:
         };
 
         ret = httpd_register_uri_handler(_server, &index);
-        if (ret == ESP_OK) {
-            ret = httpd_register_uri_handler(_server, &state);
-        }
-        if (ret == ESP_OK) {
-            ret = httpd_register_uri_handler(_server, &image);
-        }
-        if (ret == ESP_OK) {
-            ret = httpd_register_uri_handler(_server, &active);
-        }
-        if (ret == ESP_OK) {
-            ret = httpd_register_uri_handler(_server, &remove);
-        }
-        if (ret == ESP_OK) {
-            ret = httpd_register_uri_handler(_server, &upload);
+        for (const auto& route : _site.routes) {
+            if (ret != ESP_OK) {
+                break;
+            }
+            httpd_uri_t uri = {
+                .uri      = route.uri.c_str(),
+                .method   = route.method,
+                .handler  = &Session::handle_route,
+                .user_ctx = const_cast<Route*>(&route),
+            };
+            ret = httpd_register_uri_handler(_server, &uri);
         }
         if (ret == ESP_OK) {
             ret = httpd_register_uri_handler(_server, &close);
@@ -340,148 +287,22 @@ private:
         return static_cast<Session*>(req->user_ctx);
     }
 
-    static bool parse_slot_from_query(httpd_req_t* req, std::size_t& slot)
-    {
-        char query[64] = {};
-        if (httpd_req_get_url_query_len(req) <= 0 || httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
-            return false;
-        }
-
-        char slot_value[16] = {};
-        if (httpd_query_key_value(query, "slot", slot_value, sizeof(slot_value)) != ESP_OK) {
-            return false;
-        }
-
-        slot = static_cast<std::size_t>(strtoul(slot_value, nullptr, 10));
-        return true;
-    }
-
-    static void send_json(httpd_req_t* req, const std::string& body)
-    {
-        httpd_resp_set_type(req, _json_content_type);
-        httpd_resp_send(req, body.c_str(), body.size());
-    }
-
-    static std::string make_state_json(const BadgeState& state, std::string_view apSsid)
-    {
-        std::string json = "{";
-        json += "\"apSsid\":\"" + std::string(apSsid) + "\",";
-        json += "\"apUrl\":\"" + std::string(_ap_url) + "\",";
-        json += "\"slotCount\":" + std::to_string(state.slotCount) + ",";
-        json += "\"activeSlot\":" + std::to_string(state.activeSlot) + ",";
-        json += "\"slots\":[";
-        for (std::size_t index = 0; index < state.slots.size(); ++index) {
-            const auto& slot = state.slots[index];
-            if (index != 0) {
-                json += ",";
-            }
-            json += "{";
-            json += "\"slot\":" + std::to_string(slot.slot) + ",";
-            json += "\"hasImage\":" + std::string(slot.hasImage ? "true" : "false") + ",";
-            json += "\"isActive\":" + std::string(slot.isActive ? "true" : "false") + ",";
-            json += "\"imageUrl\":\"/badge/image?slot=" + std::to_string(slot.slot) + "\"";
-            json += "}";
-        }
-        json += "]}";
-        return json;
-    }
-
-    static std::string make_message_json(std::string_view status, std::string_view message)
-    {
-        return std::string("{\"status\":\"") + std::string(status) + "\",\"message\":\"" + std::string(message) + "\"}";
-    }
-
     static esp_err_t handle_index(httpd_req_t* req)
     {
+        auto* self = self_from_request(req);
         httpd_resp_set_type(req, "text/html; charset=utf-8");
-        httpd_resp_send(req, badge_config_ap_html_start, badge_config_ap_html_end - badge_config_ap_html_start);
+        httpd_resp_send(req, self->_site.indexHtml.data(), self->_site.indexHtml.size());
         return ESP_OK;
     }
 
-    static esp_err_t handle_state(httpd_req_t* req)
+    static esp_err_t handle_route(httpd_req_t* req)
     {
-        auto* self = self_from_request(req);
-        if (self == nullptr || self->_callbacks.onGetState == nullptr) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "state handler missing");
+        auto* route = static_cast<const Route*>(req->user_ctx);
+        if (route == nullptr || route->handler == nullptr) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "route handler missing");
             return ESP_FAIL;
         }
-
-        send_json(req, make_state_json(self->_callbacks.onGetState(), self->_ssid));
-        return ESP_OK;
-    }
-
-    static esp_err_t handle_image(httpd_req_t* req)
-    {
-        auto* self = self_from_request(req);
-        if (self == nullptr || self->_callbacks.onGetImage == nullptr) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "image handler missing");
-            return ESP_FAIL;
-        }
-
-        std::size_t slot = 0;
-        if (!parse_slot_from_query(req, slot)) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing slot");
-            return ESP_FAIL;
-        }
-
-        ImageData image;
-        std::string message;
-        if (!self->_callbacks.onGetImage(slot, image, message)) {
-            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, message.empty() ? "image not found" : message.c_str());
-            return ESP_FAIL;
-        }
-
-        httpd_resp_set_type(req, image.contentType.c_str());
-        httpd_resp_send(req, reinterpret_cast<const char*>(image.data.data()), image.data.size());
-        return ESP_OK;
-    }
-
-    static esp_err_t handle_set_active(httpd_req_t* req)
-    {
-        auto* self = self_from_request(req);
-        if (self == nullptr || self->_callbacks.onSetActive == nullptr) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set active handler missing");
-            return ESP_FAIL;
-        }
-
-        std::size_t slot = 0;
-        if (!parse_slot_from_query(req, slot)) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing slot");
-            return ESP_FAIL;
-        }
-
-        std::string message;
-        if (!self->_callbacks.onSetActive(slot, message)) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, message.empty() ? "set active failed" : message.c_str());
-            return ESP_FAIL;
-        }
-
-        send_json(req, make_message_json("ok", message));
-        return ESP_OK;
-    }
-
-    static esp_err_t handle_delete_image(httpd_req_t* req)
-    {
-        auto* self = self_from_request(req);
-        if (self == nullptr || self->_callbacks.onDelete == nullptr) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "delete handler missing");
-            return ESP_FAIL;
-        }
-
-        std::size_t slot = 0;
-        if (!parse_slot_from_query(req, slot)) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing slot");
-            return ESP_FAIL;
-        }
-
-        std::string message;
-        if (!self->_callbacks.onDelete(slot, message)) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, message.empty() ? "delete failed" : message.c_str());
-            return ESP_FAIL;
-        }
-
-        send_json(req, make_message_json("ok", message));
-        return ESP_OK;
+        return route->handler(req);
     }
 
     static esp_err_t handle_captive_portal(httpd_req_t* req)
@@ -508,78 +329,260 @@ private:
         return ESP_OK;
     }
 
-    static esp_err_t handle_upload(httpd_req_t* req)
-    {
-        auto* self = self_from_request(req);
-        if (self == nullptr || self->_callbacks.onUpload == nullptr) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload handler missing");
-            return ESP_FAIL;
-        }
-
-        if (req->content_len <= 0 || static_cast<std::size_t>(req->content_len) > _max_upload_size_bytes) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid upload size");
-            return ESP_FAIL;
-        }
-
-        UploadRequest upload_request;
-
-        if (!parse_slot_from_query(req, upload_request.slot)) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing slot");
-            return ESP_FAIL;
-        }
-
-        int header_length = httpd_req_get_hdr_value_len(req, "X-File-Name");
-        if (header_length > 0) {
-            std::string encoded_name(static_cast<std::size_t>(header_length) + 1, '\0');
-            if (httpd_req_get_hdr_value_str(req, "X-File-Name", encoded_name.data(), header_length + 1) == ESP_OK) {
-                encoded_name.resize(static_cast<std::size_t>(header_length));
-                upload_request.fileName = encoded_name;
-            }
-        }
-        if (upload_request.fileName.empty()) {
-            upload_request.fileName = "badge.jpg";
-        }
-
-        char content_type[64] = {};
-        if (httpd_req_get_hdr_value_str(req, "Content-Type", content_type, sizeof(content_type)) == ESP_OK) {
-            upload_request.contentType = content_type;
-        }
-
-        upload_request.data.resize(static_cast<std::size_t>(req->content_len));
-        std::size_t offset = 0;
-        while (offset < upload_request.data.size()) {
-            const int received = httpd_req_recv(req, reinterpret_cast<char*>(upload_request.data.data() + offset),
-                                                upload_request.data.size() - offset);
-            if (received <= 0) {
-                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "failed to read upload body");
-                return ESP_FAIL;
-            }
-            offset += static_cast<std::size_t>(received);
-        }
-
-        std::string message;
-        if (!self->_callbacks.onUpload(upload_request, message)) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, message.empty() ? "save failed" : message.c_str());
-            return ESP_FAIL;
-        }
-
-        send_json(req, make_message_json("ok", message.empty() ? "upload success" : message));
-        return ESP_OK;
-    }
-
     httpd_handle_t _server          = nullptr;
     EventGroupHandle_t _event_group = nullptr;
     std::function<void(std::string_view)> _on_log;
-    Callbacks _callbacks;
+    const Site& _site;
     std::string _ssid;
     std::unique_ptr<DnsServer> _dns_server;
 };
 
 }  // namespace
 
+std::string ap_ssid()
+{
+    uint8_t mac[6] = {};
+    esp_err_t ret  = esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+    if (ret != ESP_OK) {
+        ESP_LOGW(_tag, "read mac failed: %s", esp_err_to_name(ret));
+        return std::string(_ap_ssid_prefix);
+    }
+
+    char ssid[32] = {};
+    snprintf(ssid, sizeof(ssid), "%s-%02X%02X", _ap_ssid_prefix, mac[4], mac[5]);
+    return std::string(ssid);
+}
+
+std::string_view ap_url()
+{
+    return _ap_url;
+}
+
+bool run(const std::function<void(std::string_view)>& onLog, const Site& site)
+{
+    return Session(onLog, site).run();
+}
+
+}  // namespace config_ap
+
+namespace badge::config_ap {
+namespace {
+
+constexpr std::size_t _max_upload_size_bytes = 2 * 1024 * 1024;
+constexpr const char* _json_content_type     = "application/json";
+
+extern const char badge_config_ap_html_start[] asm("_binary_badge_config_ap_html_start");
+extern const char badge_config_ap_html_end[] asm("_binary_badge_config_ap_html_end");
+
+bool parse_slot_from_query(httpd_req_t* req, std::size_t& slot)
+{
+    char query[64] = {};
+    if (httpd_req_get_url_query_len(req) <= 0 || httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+        return false;
+    }
+
+    char slot_value[16] = {};
+    if (httpd_query_key_value(query, "slot", slot_value, sizeof(slot_value)) != ESP_OK) {
+        return false;
+    }
+
+    slot = static_cast<std::size_t>(strtoul(slot_value, nullptr, 10));
+    return true;
+}
+
+void send_json(httpd_req_t* req, const std::string& body)
+{
+    httpd_resp_set_type(req, _json_content_type);
+    httpd_resp_send(req, body.c_str(), body.size());
+}
+
+std::string make_state_json(const BadgeState& state, std::string_view apSsid)
+{
+    std::string json = "{";
+    json += "\"apSsid\":\"" + std::string(apSsid) + "\",";
+    json += "\"apUrl\":\"" + std::string(::config_ap::ap_url()) + "\",";
+    json += "\"slotCount\":" + std::to_string(state.slotCount) + ",";
+    json += "\"activeSlot\":" + std::to_string(state.activeSlot) + ",";
+    json += "\"slots\":[";
+    for (std::size_t index = 0; index < state.slots.size(); ++index) {
+        const auto& slot = state.slots[index];
+        if (index != 0) {
+            json += ",";
+        }
+        json += "{";
+        json += "\"slot\":" + std::to_string(slot.slot) + ",";
+        json += "\"hasImage\":" + std::string(slot.hasImage ? "true" : "false") + ",";
+        json += "\"isActive\":" + std::string(slot.isActive ? "true" : "false") + ",";
+        json += "\"imageUrl\":\"/badge/image?slot=" + std::to_string(slot.slot) + "\"";
+        json += "}";
+    }
+    json += "]}";
+    return json;
+}
+
+std::string make_message_json(std::string_view status, std::string_view message)
+{
+    return std::string("{\"status\":\"") + std::string(status) + "\",\"message\":\"" + std::string(message) + "\"}";
+}
+
+esp_err_t handle_state(httpd_req_t* req, const Callbacks& callbacks, std::string_view apSsid)
+{
+    if (callbacks.onGetState == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "state handler missing");
+        return ESP_FAIL;
+    }
+
+    send_json(req, make_state_json(callbacks.onGetState(), apSsid));
+    return ESP_OK;
+}
+
+esp_err_t handle_image(httpd_req_t* req, const Callbacks& callbacks)
+{
+    if (callbacks.onGetImage == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "image handler missing");
+        return ESP_FAIL;
+    }
+
+    std::size_t slot = 0;
+    if (!parse_slot_from_query(req, slot)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing slot");
+        return ESP_FAIL;
+    }
+
+    ImageData image;
+    std::string message;
+    if (!callbacks.onGetImage(slot, image, message)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, message.empty() ? "image not found" : message.c_str());
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, image.contentType.c_str());
+    httpd_resp_send(req, reinterpret_cast<const char*>(image.data.data()), image.data.size());
+    return ESP_OK;
+}
+
+esp_err_t handle_set_active(httpd_req_t* req, const Callbacks& callbacks)
+{
+    if (callbacks.onSetActive == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set active handler missing");
+        return ESP_FAIL;
+    }
+
+    std::size_t slot = 0;
+    if (!parse_slot_from_query(req, slot)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing slot");
+        return ESP_FAIL;
+    }
+
+    std::string message;
+    if (!callbacks.onSetActive(slot, message)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, message.empty() ? "set active failed" : message.c_str());
+        return ESP_FAIL;
+    }
+
+    send_json(req, make_message_json("ok", message));
+    return ESP_OK;
+}
+
+esp_err_t handle_delete_image(httpd_req_t* req, const Callbacks& callbacks)
+{
+    if (callbacks.onDelete == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "delete handler missing");
+        return ESP_FAIL;
+    }
+
+    std::size_t slot = 0;
+    if (!parse_slot_from_query(req, slot)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing slot");
+        return ESP_FAIL;
+    }
+
+    std::string message;
+    if (!callbacks.onDelete(slot, message)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, message.empty() ? "delete failed" : message.c_str());
+        return ESP_FAIL;
+    }
+
+    send_json(req, make_message_json("ok", message));
+    return ESP_OK;
+}
+
+esp_err_t handle_upload(httpd_req_t* req, const Callbacks& callbacks)
+{
+    if (callbacks.onUpload == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload handler missing");
+        return ESP_FAIL;
+    }
+
+    if (req->content_len <= 0 || static_cast<std::size_t>(req->content_len) > _max_upload_size_bytes) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid upload size");
+        return ESP_FAIL;
+    }
+
+    UploadRequest upload_request;
+
+    if (!parse_slot_from_query(req, upload_request.slot)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing slot");
+        return ESP_FAIL;
+    }
+
+    int header_length = httpd_req_get_hdr_value_len(req, "X-File-Name");
+    if (header_length > 0) {
+        std::string encoded_name(static_cast<std::size_t>(header_length) + 1, '\0');
+        if (httpd_req_get_hdr_value_str(req, "X-File-Name", encoded_name.data(), header_length + 1) == ESP_OK) {
+            encoded_name.resize(static_cast<std::size_t>(header_length));
+            upload_request.fileName = encoded_name;
+        }
+    }
+    if (upload_request.fileName.empty()) {
+        upload_request.fileName = "badge.jpg";
+    }
+
+    char content_type[64] = {};
+    if (httpd_req_get_hdr_value_str(req, "Content-Type", content_type, sizeof(content_type)) == ESP_OK) {
+        upload_request.contentType = content_type;
+    }
+
+    upload_request.data.resize(static_cast<std::size_t>(req->content_len));
+    std::size_t offset = 0;
+    while (offset < upload_request.data.size()) {
+        const int received = httpd_req_recv(req, reinterpret_cast<char*>(upload_request.data.data() + offset),
+                                            upload_request.data.size() - offset);
+        if (received <= 0) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "failed to read upload body");
+            return ESP_FAIL;
+        }
+        offset += static_cast<std::size_t>(received);
+    }
+
+    std::string message;
+    if (!callbacks.onUpload(upload_request, message)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, message.empty() ? "save failed" : message.c_str());
+        return ESP_FAIL;
+    }
+
+    send_json(req, make_message_json("ok", message.empty() ? "upload success" : message));
+    return ESP_OK;
+}
+
+}  // namespace
+
 bool run(const std::function<void(std::string_view)>& onLog, const Callbacks& callbacks)
 {
-    return Session(onLog, callbacks).run();
+    const std::string ap_ssid = ::config_ap::ap_ssid();
+
+    ::config_ap::Site site;
+    site.indexHtml =
+        std::string_view(badge_config_ap_html_start, badge_config_ap_html_end - badge_config_ap_html_start);
+    site.routes = {
+        {"/badge/state", HTTP_GET, [&](httpd_req_t* req) { return handle_state(req, callbacks, ap_ssid); }},
+        {"/badge/image", HTTP_GET, [&](httpd_req_t* req) { return handle_image(req, callbacks); }},
+        {"/badge/active", HTTP_POST, [&](httpd_req_t* req) { return handle_set_active(req, callbacks); }},
+        {"/badge/image", HTTP_DELETE, [&](httpd_req_t* req) { return handle_delete_image(req, callbacks); }},
+        {"/upload", HTTP_POST, [&](httpd_req_t* req) { return handle_upload(req, callbacks); }},
+    };
+
+    return ::config_ap::run(onLog, site);
 }
 
 }  // namespace badge::config_ap

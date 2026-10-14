@@ -29,7 +29,7 @@ constexpr uint32_t _hint_text_color      = 0xD9D9D9;
 
 }  // namespace
 
-void EditBadgeDialog::init(lv_obj_t* parent)
+void EditBadgeDialog::init(lv_obj_t* parent, std::string_view message)
 {
     _is_confirmed = false;
     _is_cancelled = false;
@@ -46,7 +46,7 @@ void EditBadgeDialog::init(lv_obj_t* parent)
     _panel->moveForeground();
 
     _label = std::make_unique<Label>(_panel->get());
-    _label->setText("Enter badge edit?");
+    _label->setText(message);
     _label->setTextFont(&MontserratSemiBold26);
     _label->setTextColor(lv_color_hex(_label_color));
     _label->align(LV_ALIGN_TOP_LEFT, 49, 40);
