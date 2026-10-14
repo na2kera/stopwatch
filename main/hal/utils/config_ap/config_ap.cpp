@@ -572,8 +572,9 @@ bool run(const std::function<void(std::string_view)>& onLog, const Callbacks& ca
     const std::string ap_ssid = ::config_ap::ap_ssid();
 
     ::config_ap::Site site;
-    site.indexHtml = std::string_view(badge_config_ap_html_start, badge_config_ap_html_end - badge_config_ap_html_start);
-    site.routes    = {
+    site.indexHtml =
+        std::string_view(badge_config_ap_html_start, badge_config_ap_html_end - badge_config_ap_html_start);
+    site.routes = {
         {"/badge/state", HTTP_GET, [&](httpd_req_t* req) { return handle_state(req, callbacks, ap_ssid); }},
         {"/badge/image", HTTP_GET, [&](httpd_req_t* req) { return handle_image(req, callbacks); }},
         {"/badge/active", HTTP_POST, [&](httpd_req_t* req) { return handle_set_active(req, callbacks); }},
