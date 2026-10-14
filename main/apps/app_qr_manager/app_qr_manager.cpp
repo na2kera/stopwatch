@@ -3,6 +3,7 @@
  */
 #include "app_qr_manager.h"
 #include <apps/common/loading_page/loading_page.h>
+#include <assets/assets.h>
 #include <hal/hal.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
@@ -13,6 +14,7 @@ using namespace mooncake;
 AppQrManager::AppQrManager()
 {
     setAppInfo().name = "QR Manager";
+    setAppInfo().icon = (void*)&icon_qr_manager;
 }
 
 void AppQrManager::onCreate()
