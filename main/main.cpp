@@ -44,6 +44,7 @@ extern "C" void app_main(void)
     // Main loop
     while (1) {
         GetHAL().feedTheDog();
+        GetHAL().updateOrientation();
         GetMooncake().update();
     }
 }

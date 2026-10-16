@@ -9,6 +9,7 @@
 #include <mooncake_log.h>
 #include <driver/gpio.h>
 #include <memory>
+#include <utility>
 
 static const std::string_view _tag = "HAL-BTN";
 
@@ -34,8 +35,14 @@ void Hal::button_init()
 
 void Hal::updateButtonStates()
 {
-    btnA.setRawState(millis(), !gpio_get_level(USER_BUTTONA_PIN));
-    btnB.setRawState(millis(), !gpio_get_level(USER_BUTTONB_PIN));
+    bool raw_a = !gpio_get_level(USER_BUTTONA_PIN);
+    bool raw_b = !gpio_get_level(USER_BUTTONB_PIN);
+    // When the UI is upside down, swap the buttons so they follow the screen
+    if (isDisplayInverted()) {
+        std::swap(raw_a, raw_b);
+    }
+    btnA.setRawState(millis(), raw_a);
+    btnB.setRawState(millis(), raw_b);
     // btnPwr.setRawState(millis(), pmic_get_pwr_btn_state());
 
     auto& config = getButtonConfig();
