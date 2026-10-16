@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <vector>
+#include <functional>
 
 using namespace smooth_ui_toolkit::lvgl_cpp;
 using namespace setup_workers;
@@ -133,9 +134,19 @@ private:
     bool _syncing_slider = false;
 };
 
-class ButtonWorker::ButtonConfigView {
+/**
+ * @brief Page with a list of switch rows and an OK button
+ *
+ */
+class SwitchConfigView {
 public:
-    explicit ButtonConfigView(const Hal::ButtonConfig& initialConfig) : _current_config(initialConfig)
+    struct Item {
+        const char* title = "";
+        bool initialValue = false;
+        std::function<void(bool)> onChanged;
+    };
+
+    explicit SwitchConfigView(const std::vector<Item>& items)
     {
         _panel = std::make_unique<Container>(lv_screen_active());
         _panel->align(LV_ALIGN_CENTER, 0, 0);
@@ -147,10 +158,18 @@ public:
         _panel->setBgOpa(LV_OPA_COVER);
         _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
-        createSwitchRow(88, "Button SFX", _current_config.sfxEnabled,
-                        [this](bool enabled) { _current_config.sfxEnabled = enabled; });
-        createSwitchRow(195, "Button Vibration", _current_config.vibrateEnabled,
-                        [this](bool enabled) { _current_config.vibrateEnabled = enabled; });
+        _values.reserve(items.size());
+        for (std::size_t i = 0; i < items.size(); i++) {
+            _values.push_back(items[i].initialValue);
+            auto on_changed = items[i].onChanged;
+            createSwitchRow(88 + static_cast<int>(i) * 107, items[i].title, items[i].initialValue,
+                            [this, i, on_changed](bool enabled) {
+                                _values[i] = enabled;
+                                if (on_changed) {
+                                    on_changed(enabled);
+                                }
+                            });
+        }
 
         _ok_button = std::make_unique<Button>(_panel->get());
         _ok_button->align(LV_ALIGN_CENTER, 0, 175);
@@ -166,9 +185,9 @@ public:
         _ok_button->onClick().connect([this]() { _save_requested = true; });
     }
 
-    const Hal::ButtonConfig& currentConfig() const
+    bool value(std::size_t index) const
     {
-        return _current_config;
+        return index < _values.size() ? _values[index] : false;
     }
 
     bool consumeSaveRequested()
@@ -209,9 +228,12 @@ private:
         lv_obj_set_style_bg_opa(switch_widget->get(), LV_OPA_COVER, LV_PART_KNOB);
         lv_obj_set_style_border_width(switch_widget->get(), 0, LV_PART_KNOB);
         lv_obj_set_style_radius(switch_widget->get(), LV_RADIUS_CIRCLE, LV_PART_KNOB);
-        switch_widget->setBgColor(lv_color_hex(0x53BD65), LV_PART_INDICATOR | LV_STATE_CHECKED);
-        switch_widget->setBgOpa(LV_OPA_COVER, LV_PART_INDICATOR | LV_STATE_CHECKED);
-        switch_widget->setBorderWidth(0, LV_PART_INDICATOR | LV_STATE_CHECKED);
+        // Same selector value as LV_PART_INDICATOR | LV_STATE_CHECKED, without the enum-enum conversion warning
+        constexpr lv_style_selector_t kIndicatorChecked =
+            static_cast<lv_style_selector_t>(LV_PART_INDICATOR) | static_cast<lv_style_selector_t>(LV_STATE_CHECKED);
+        switch_widget->setBgColor(lv_color_hex(0x53BD65), kIndicatorChecked);
+        switch_widget->setBgOpa(LV_OPA_COVER, kIndicatorChecked);
+        switch_widget->setBorderWidth(0, kIndicatorChecked);
         switch_widget->onValueChanged().connect(onChanged);
 
         _labels.push_back(std::move(label));
@@ -224,7 +246,7 @@ private:
     std::vector<std::unique_ptr<Label>> _labels;
     std::vector<std::unique_ptr<Switch>> _switches;
     std::unique_ptr<Button> _ok_button;
-    Hal::ButtonConfig _current_config;
+    std::vector<bool> _values;
     bool _save_requested = false;
 };
 
@@ -285,23 +307,68 @@ ButtonWorker::ButtonWorker()
     mclog::tagInfo(_tag, "start button worker");
 
     _applied_config = GetHAL().getButtonConfig();
-    _view           = std::make_unique<ButtonConfigView>(_applied_config);
+    _view           = std::make_unique<SwitchConfigView>(std::vector<SwitchConfigView::Item>{
+        {"Button SFX", _applied_config.sfxEnabled, nullptr},
+        {"Button Vibration", _applied_config.vibrateEnabled, nullptr},
+    });
 }
 
 void ButtonWorker::update()
 {
-    if (_view && (_applied_config.sfxEnabled != _view->currentConfig().sfxEnabled ||
-                  _applied_config.vibrateEnabled != _view->currentConfig().vibrateEnabled)) {
-        GetHAL().setButtonConfig(_view->currentConfig(), false);
-        _applied_config = _view->currentConfig();
+    if (!_view) {
+        return;
     }
 
-    if (_view && _view->consumeSaveRequested()) {
-        GetHAL().setButtonConfig(_view->currentConfig(), true);
+    Hal::ButtonConfig current_config;
+    current_config.sfxEnabled     = _view->value(0);
+    current_config.vibrateEnabled = _view->value(1);
+
+    if (_applied_config.sfxEnabled != current_config.sfxEnabled ||
+        _applied_config.vibrateEnabled != current_config.vibrateEnabled) {
+        GetHAL().setButtonConfig(current_config, false);
+        _applied_config = current_config;
+    }
+
+    if (_view->consumeSaveRequested()) {
+        GetHAL().setButtonConfig(current_config, true);
         _is_done = true;
     }
 }
 
 ButtonWorker::~ButtonWorker()
+{
+}
+
+DisplayWorker::DisplayWorker()
+{
+    mclog::tagInfo(_tag, "start display worker");
+
+    _applied_auto_rotate = GetHAL().getAutoRotate();
+    _view                = std::make_unique<SwitchConfigView>(std::vector<SwitchConfigView::Item>{
+        {"Auto Rotate", _applied_auto_rotate, nullptr},
+    });
+}
+
+void DisplayWorker::update()
+{
+    if (!_view) {
+        return;
+    }
+
+    // setAutoRotate() only stores the flag (it never takes the LVGL lock, which is already held here).
+    // The rotation itself is applied from the main loop by Hal::updateOrientation().
+    const bool auto_rotate = _view->value(0);
+    if (_applied_auto_rotate != auto_rotate) {
+        GetHAL().setAutoRotate(auto_rotate, false);
+        _applied_auto_rotate = auto_rotate;
+    }
+
+    if (_view->consumeSaveRequested()) {
+        GetHAL().setAutoRotate(auto_rotate, true);
+        _is_done = true;
+    }
+}
+
+DisplayWorker::~DisplayWorker()
 {
 }

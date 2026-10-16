@@ -177,6 +177,14 @@ public:
     void setBackLightBrightness(int brightness, bool saveToSettings = false);
     int getBackLightBrightness(bool loadFromSettings = false);
 
+    // Auto rotate (flip the UI 180 degrees when the device is held upside down)
+    void setAutoRotate(bool enabled, bool saveToSettings = false);
+    bool getAutoRotate(bool loadFromSettings = false);
+    // Polls the accelerometer and applies the display rotation. Must be called without holding the LVGL lock.
+    void updateOrientation();
+    // True while the UI is rotated 180 degrees (buttons A/B are swapped to follow the screen)
+    bool isDisplayInverted() const;
+
     // M5GFX
     LGFX_Device& getDisplay();
     LGFX_Sprite& getCanvas();
@@ -231,7 +239,8 @@ public:
         float gyroY  = 0.0f;
         float gyroZ  = 0.0f;
     };
-    void updateImuData();
+    // Returns true only when a fresh accelerometer sample was read in this call
+    bool updateImuData();
     const ImuData& getImuData() const
     {
         return _imu_data;
@@ -287,6 +296,7 @@ private:
     AudioSpectrumFrame _audio_spectrum;
     int _bl_brightness = 80;
     int _spk_volume    = 80;
+    bool _auto_rotate  = true;
 
     void i2c_init();
     void i2c_detect();

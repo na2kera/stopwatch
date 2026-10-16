@@ -14,6 +14,7 @@
 namespace setup_workers {
 
 class PercentageAdjustView;
+class SwitchConfigView;
 
 /**
  * @brief
@@ -79,10 +80,23 @@ public:
     void update() override;
 
 private:
-    class ButtonConfigView;
-
-    std::unique_ptr<ButtonConfigView> _view;
+    std::unique_ptr<SwitchConfigView> _view;
     Hal::ButtonConfig _applied_config;
+};
+
+/**
+ * @brief
+ *
+ */
+class DisplayWorker : public WorkerBase {
+public:
+    DisplayWorker();
+    ~DisplayWorker();
+    void update() override;
+
+private:
+    std::unique_ptr<SwitchConfigView> _view;
+    bool _applied_auto_rotate = true;
 };
 
 /**

@@ -182,6 +182,9 @@ void Hal::display_init()
     // Load brightness from settings
     auto brightness = getBackLightBrightness(true);
     setBackLightBrightness(brightness, false);
+
+    // Load auto rotate flag from settings (applied in updateOrientation())
+    getAutoRotate(true);
 }
 
 LGFX_Device &Hal::getDisplay()
@@ -211,6 +214,29 @@ void Hal::setBackLightBrightness(int brightness, bool saveToSettings)
         settings.SetInt("bl_lev", _bl_brightness);
         mclog::tagInfo(_tag, "brightness saved to settings: {}", _bl_brightness);
     }
+}
+
+void Hal::setAutoRotate(bool enabled, bool saveToSettings)
+{
+    // Only stores the flag. The rotation itself is applied in updateOrientation(),
+    // so this must never take the LVGL lock (callers may already hold it).
+    _auto_rotate = enabled;
+
+    if (saveToSettings) {
+        Settings settings(std::string(Hal::SettingsNs), true);
+        settings.SetBool("auto_rotate", _auto_rotate);
+        mclog::tagInfo(_tag, "auto rotate saved to settings: {}", _auto_rotate);
+    }
+}
+
+bool Hal::getAutoRotate(bool loadFromSettings)
+{
+    if (loadFromSettings) {
+        Settings settings(std::string(Hal::SettingsNs), false);
+        _auto_rotate = settings.GetBool("auto_rotate", true);
+        mclog::tagInfo(_tag, "auto rotate loaded from settings: {}", _auto_rotate);
+    }
+    return _auto_rotate;
 }
 
 int Hal::getBackLightBrightness(bool loadFromSettings)
@@ -265,6 +291,7 @@ Hal::TouchPoint Hal::getTouchPoint()
 #include <cstring>  // for memset
 #include <lvgl.h>
 #include <atomic>
+#include <algorithm>
 
 static SemaphoreHandle_t xGuiSemaphore;
 static std::atomic<bool> _lvgl_update_enabled = false;
@@ -297,8 +324,18 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
     uint32_t h      = (area->y2 - area->y1 + 1);
     uint32_t pixels = w * h;
 
+    // Only 0 and 180 degrees are used. A 180 degree rotation of a w x h block is the same as
+    // reversing its linear pixel sequence, and the target area is mirrored around the screen center.
+    // The flush is synchronous and runs after rendering is complete, so reversing in place is safe.
+    lv_area_t rotated = *area;
+    if (lv_display_get_rotation(disp) == LV_DISPLAY_ROTATION_180) {
+        lv_display_rotate_area(disp, &rotated);
+        uint16_t *pixels_u16 = (uint16_t *)px_map;
+        std::reverse(pixels_u16, pixels_u16 + pixels);
+    }
+
     gfx.startWrite();
-    gfx.setAddrWindow(area->x1, area->y1, w, h);
+    gfx.setAddrWindow(rotated.x1, rotated.y1, w, h);
 
     // Critical fix: Use safe pixel writing method to avoid M5GFX SIMD optimizations
     // Break large transfers into small chunks to avoid problematic copy_rgb_fast function
